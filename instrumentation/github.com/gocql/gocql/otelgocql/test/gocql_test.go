@@ -255,7 +255,7 @@ func getCluster() *gocql.ClusterConfig {
 func assertScope(t *testing.T, sm metricdata.ScopeMetrics) {
 	assert.Equal(t, instrumentation.Scope{
 		Name:    "go.opentelemetry.io/contrib/instrumentation/github.com/gocql/gocql/otelgocql",
-		Version: otelgocql.SemVersion(),
+		Version: otelgocql.Version(),
 	}, sm.Scope)
 }
 
@@ -339,8 +339,8 @@ func assertConnectionsMetric(t *testing.T, m metricdata.Metrics) {
 func assertRowsMetric(t *testing.T, count uint64, m metricdata.Metrics) {
 	assert.Equal(t, "db.cassandra.rows", m.Name)
 	assert.Equal(t, "Number of rows returned from query", m.Description)
-	require.IsType(t, m.Data, metricdata.Histogram{})
-	data := m.Data.(metricdata.Histogram)
+	require.IsType(t, m.Data, metricdata.Histogram[int64]{})
+	data := m.Data.(metricdata.Histogram[int64])
 	assert.Equal(t, metricdata.CumulativeTemporality, data.Temporality, "Temporality")
 	require.Len(t, data.DataPoints, 1, "DataPoints")
 	dPt := data.DataPoints[0]
@@ -360,8 +360,8 @@ func assertLatencyMetric(t *testing.T, count uint64, m metricdata.Metrics) {
 	assert.Equal(t, "db.cassandra.latency", m.Name)
 	assert.Equal(t, "Sum of latency to host in milliseconds", m.Description)
 	assert.Equal(t, "ms", m.Unit)
-	require.IsType(t, m.Data, metricdata.Histogram{})
-	data := m.Data.(metricdata.Histogram)
+	require.IsType(t, m.Data, metricdata.Histogram[int64]{})
+	data := m.Data.(metricdata.Histogram[int64])
 	assert.Equal(t, metricdata.CumulativeTemporality, data.Temporality, "Temporality")
 	require.Len(t, data.DataPoints, 1, "DataPoints")
 	dPt := data.DataPoints[0]

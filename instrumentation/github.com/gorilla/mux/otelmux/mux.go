@@ -22,12 +22,11 @@ import (
 	"github.com/felixge/httpsnoop"
 	"github.com/gorilla/mux"
 
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gorilla/mux/otelmux/internal/semconvutil"
 	"go.opentelemetry.io/otel"
-
 	"go.opentelemetry.io/otel/propagation"
 	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
-	"go.opentelemetry.io/otel/semconv/v1.17.0/httpconv"
-	oteltrace "go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -47,7 +46,7 @@ func Middleware(service string, opts ...Option) mux.MiddlewareFunc {
 	}
 	tracer := cfg.TracerProvider.Tracer(
 		tracerName,
-		oteltrace.WithInstrumentationVersion(SemVersion()),
+		trace.WithInstrumentationVersion(Version()),
 	)
 	if cfg.Propagators == nil {
 		cfg.Propagators = otel.GetTextMapPropagator()
@@ -55,6 +54,7 @@ func Middleware(service string, opts ...Option) mux.MiddlewareFunc {
 	if cfg.spanNameFormatter == nil {
 		cfg.spanNameFormatter = defaultSpanNameFunc
 	}
+
 	return func(handler http.Handler) http.Handler {
 		return traceware{
 			service:           service,
@@ -62,16 +62,20 @@ func Middleware(service string, opts ...Option) mux.MiddlewareFunc {
 			propagators:       cfg.Propagators,
 			handler:           handler,
 			spanNameFormatter: cfg.spanNameFormatter,
+			publicEndpoint:    cfg.PublicEndpoint,
+			publicEndpointFn:  cfg.PublicEndpointFn,
 		}
 	}
 }
 
 type traceware struct {
 	service           string
-	tracer            oteltrace.Tracer
+	tracer            trace.Tracer
 	propagators       propagation.TextMapPropagator
 	handler           http.Handler
 	spanNameFormatter func(string, *http.Request) string
+	publicEndpoint    bool
+	publicEndpointFn  func(*http.Request) bool
 }
 
 type recordingResponseWriter struct {
@@ -136,15 +140,25 @@ func (tw traceware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	opts := []oteltrace.SpanStartOption{
-		oteltrace.WithAttributes(httpconv.ServerRequest(tw.service, r)...),
-		oteltrace.WithSpanKind(oteltrace.SpanKindServer),
+
+	opts := []trace.SpanStartOption{
+		trace.WithAttributes(semconvutil.HTTPServerRequest(tw.service, r)...),
+		trace.WithSpanKind(trace.SpanKindServer),
 	}
+
+	if tw.publicEndpoint || (tw.publicEndpointFn != nil && tw.publicEndpointFn(r.WithContext(ctx))) {
+		opts = append(opts, trace.WithNewRoot())
+		// Linking incoming span context if any for public endpoint.
+		if s := trace.SpanContextFromContext(ctx); s.IsValid() && s.IsRemote() {
+			opts = append(opts, trace.WithLinks(trace.Link{SpanContext: s}))
+		}
+	}
+
 	if routeStr == "" {
 		routeStr = fmt.Sprintf("HTTP %s route not found", r.Method)
 	} else {
 		rAttr := semconv.HTTPRoute(routeStr)
-		opts = append(opts, oteltrace.WithAttributes(rAttr))
+		opts = append(opts, trace.WithAttributes(rAttr))
 	}
 	spanName := tw.spanNameFormatter(routeStr, r)
 	ctx, span := tw.tracer.Start(ctx, spanName, opts...)
@@ -156,5 +170,5 @@ func (tw traceware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if rrw.status > 0 {
 		span.SetAttributes(semconv.HTTPStatusCode(rrw.status))
 	}
-	span.SetStatus(httpconv.ServerStatus(rrw.status))
+	span.SetStatus(semconvutil.HTTPServerStatus(rrw.status))
 }
